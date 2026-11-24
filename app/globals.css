@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+/* Anti-flash móvil: el script en layout.tsx marca <html> con
+   .na-mobile antes del primer pintado; la rama de escritorio queda oculta
+   hasta que React monta el acordeón. page.tsx sincroniza la clase al
+   cambiar el tamaño de la ventana. */
+html.na-mobile .na-desktop-root {
+  display: none !important;
+}
