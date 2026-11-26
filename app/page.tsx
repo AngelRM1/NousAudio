@@ -465,57 +465,88 @@ export default function Home() {
         </div>
       )}
 
-      {/* Escritorio: vista previa en el centro, paneles flotantes colapsables. */}
-      <main className="na-desktop-root relative mx-auto max-w-7xl px-4 pb-10 pt-4">
-        <div className="mx-auto max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-100 px-4 py-3">
-            <h2 className="text-base font-bold text-slate-900">
-              Estudio Audio a Video
-            </h2>
-            <p className="text-xs text-slate-500">
-              Vista previa en vivo con sonido. Graba el video en tiempo real
-              mientras suena el audio.
-            </p>
-          </div>
-          {preview}
-        </div>
+      {/* Escritorio: rejilla de 3 columnas, cada sección ocupa solo su
+          espacio, sin superponerse: Tus audios | Estudio | Configuración.
+          Los paneles laterales se colapsan a una barra estrecha. */}
+      <main className="na-desktop-root mx-auto max-w-[1600px] px-4 pb-10 pt-4">
+        <div
+          className="grid items-start gap-4"
+          style={{
+            gridTemplateColumns: `${leftOpen ? 340 : 48}px minmax(0, 1fr) ${rightOpen ? 320 : 48}px`,
+          }}
+        >
+          <aside className="sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+            {leftOpen ? (
+              <>
+                <div className="flex items-center justify-between border-b border-slate-100 px-4 pt-3">
+                  <h2 className="text-base font-bold text-slate-900">Tus audios</h2>
+                  <button
+                    type="button"
+                    onClick={() => setLeftOpen(false)}
+                    aria-label="Colapsar Tus audios"
+                    className="rounded-full px-2 py-1 text-sm font-bold text-slate-500 hover:bg-slate-100"
+                  >
+                    ◀
+                  </button>
+                </div>
+                {leftPanel}
+              </>
+            ) : (
+              <div className="flex justify-center py-3">
+                <button
+                  type="button"
+                  onClick={() => setLeftOpen(true)}
+                  aria-label="Mostrar Tus audios"
+                  className="[writing-mode:vertical-rl] rounded-full bg-white px-2 py-3 text-xs font-bold text-slate-700 shadow ring-1 ring-slate-200"
+                >
+                  Tus audios ▶
+                </button>
+              </div>
+            )}
+          </aside>
 
-        <div className="absolute left-4 top-4 flex items-start gap-2">
-          <button
-            type="button"
-            onClick={() => setLeftOpen((v) => !v)}
-            aria-expanded={leftOpen}
-            className="rounded-full bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-md ring-1 ring-slate-200"
-          >
-            {leftOpen ? "◀ Tus audios" : "Tus audios ▶"}
-          </button>
-          {leftOpen && (
-            <div className="max-h-[calc(100vh-160px)] w-[340px] overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-lg">
-              <h2 className="border-b border-slate-100 px-4 pt-3 text-base font-bold text-slate-900">
-                Tus audios
+          <section className="min-w-0 rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-100 px-4 py-3">
+              <h2 className="text-base font-bold text-slate-900">
+                Estudio Audio a Video
               </h2>
-              {leftPanel}
+              <p className="text-xs text-slate-500">
+                Vista previa en vivo con sonido. Graba el video en tiempo real
+                mientras suena el audio.
+              </p>
             </div>
-          )}
-        </div>
+            {preview}
+          </section>
 
-        <div className="absolute right-4 top-4 flex items-start gap-2">
-          {rightOpen && (
-            <div className="max-h-[calc(100vh-160px)] w-[320px] overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-lg">
-              <h2 className="border-b border-slate-100 px-4 pt-3 text-base font-bold text-slate-900">
-                Configuración
-              </h2>
-              {rightPanel}
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={() => setRightOpen((v) => !v)}
-            aria-expanded={rightOpen}
-            className="rounded-full bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-md ring-1 ring-slate-200"
-          >
-            {rightOpen ? "Configuración ▶" : "◀ Configuración"}
-          </button>
+          <aside className="sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+            {rightOpen ? (
+              <>
+                <div className="flex items-center justify-between border-b border-slate-100 px-4 pt-3">
+                  <h2 className="text-base font-bold text-slate-900">Configuración</h2>
+                  <button
+                    type="button"
+                    onClick={() => setRightOpen(false)}
+                    aria-label="Colapsar Configuración"
+                    className="rounded-full px-2 py-1 text-sm font-bold text-slate-500 hover:bg-slate-100"
+                  >
+                    ▶
+                  </button>
+                </div>
+                {rightPanel}
+              </>
+            ) : (
+              <div className="flex justify-center py-3">
+                <button
+                  type="button"
+                  onClick={() => setRightOpen(true)}
+                  aria-label="Mostrar Configuración"
+                  className="[writing-mode:vertical-rl] rounded-full bg-white px-2 py-3 text-xs font-bold text-slate-700 shadow ring-1 ring-slate-200"
+                >
+                  ◀ Configuración
+                </button>
+              </div>
+            )}
+          </aside>
         </div>
       </main>
 

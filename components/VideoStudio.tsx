@@ -6,27 +6,44 @@ import {
   PRESET_BACKGROUNDS,
   VIDEO_SIZES,
   type AudioTrack,
+  type BackgroundMode,
   type VideoFormat,
   type VisualizerStyle,
 } from "@/lib/types";
 
-type CustomBg =
-  | { kind: "image"; url: string }
-  | { kind: "video"; url: string }
-  | null;
+interface CustomBgItem {
+  id: string;
+  kind: "image" | "video";
+  url: string;
+  name: string;
+}
 
-function drawCover(
+let bgCounter = 0;
+function nextBgId(): string {
+  bgCounter += 1;
+  return `fondo-${Date.now()}-${bgCounter}`;
+}
+
+function drawCoverRect(
   ctx: CanvasRenderingContext2D,
   img: CanvasImageSource,
   iw: number,
   ih: number,
+  x: number,
+  y: number,
   w: number,
   h: number,
 ) {
+  if (iw <= 0 || ih <= 0 || w <= 0 || h <= 0) return;
   const scale = Math.max(w / iw, h / ih);
   const dw = iw * scale;
   const dh = ih * scale;
-  ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+  ctx.restore();
 }
 
 /** Fondos animados predefinidos, dibujados en el canvas. */
@@ -177,7 +194,13 @@ export default function VideoStudio({
 }) {
   const [format, setFormat] = useState<VideoFormat>("16:9");
   const [preset, setPreset] = useState(0);
-  const [customBg, setCustomBg] = useState<CustomBg>(null);
+  /** Fondos propios: varias imágenes y videos, que se van añadiendo. */
+  const [customBgs, setCustomBgs] = useState<CustomBgItem[]>([]);
+  /** null = fondo predefinido animado; si no, el fondo propio activo. */
+  const [activeCustomId, setActiveCustomId] = useState<string | null>(null);
+  const [bgMode, setBgMode] = useState<BackgroundMode>("single");
+  const [slideSeconds, setSlideSeconds] = useState(5);
+  const [slideIndex, setSlideIndex] = useState(0);
   const [visualizer, setVisualizer] = useState<VisualizerStyle>("bars");
   const [title, setTitle] = useState("");
   const [subtitle, setSubtitle] = useState("");
@@ -194,38 +217,79 @@ export default function VideoStudio({
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const mediaDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
-  const bgVideoRef = useRef<HTMLVideoElement | null>(null);
-  const bgImageRef = useRef<HTMLImageElement | null>(null);
+  /** Elementos preparados (imagen o video) por cada fondo propio. */
+  const bgElementsRef = useRef(
+    new Map<string, { image?: HTMLImageElement; video?: HTMLVideoElement }>(),
+  );
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const recTimerRef = useRef<number | null>(null);
-  const stateRef = useRef({ preset, customBg, visualizer, title, subtitle, showProgress, playing, track });
-  stateRef.current = { preset, customBg, visualizer, title, subtitle, showProgress, playing, track };
+  const stateRef = useRef({
+    preset,
+    customBgs,
+    activeCustomId,
+    bgMode,
+    slideIndex,
+    visualizer,
+    title,
+    subtitle,
+    showProgress,
+    playing,
+    track,
+  });
+  stateRef.current = {
+    preset,
+    customBgs,
+    activeCustomId,
+    bgMode,
+    slideIndex,
+    visualizer,
+    title,
+    subtitle,
+    showProgress,
+    playing,
+    track,
+  };
 
   const size = VIDEO_SIZES[format];
 
-  // Fondo propio: preparar imagen o video cuando cambia.
+  // Fondos propios: preparar imagen o video para cada uno, y limpiar los
+  // que se quiten de la lista. Los videos quedan en bucle y sin sonido.
   useEffect(() => {
-    if (!customBg) return;
-    if (customBg.kind === "image") {
-      const img = new Image();
-      img.src = customBg.url;
-      bgImageRef.current = img;
-    } else {
-      const video = document.createElement("video");
-      video.src = customBg.url;
-      video.loop = true;
-      video.muted = true;
-      video.playsInline = true;
-      void video.play().catch(() => undefined);
-      bgVideoRef.current = video;
+    const map = bgElementsRef.current;
+    for (const bg of customBgs) {
+      if (map.has(bg.id)) continue;
+      if (bg.kind === "image") {
+        const img = new Image();
+        img.src = bg.url;
+        map.set(bg.id, { image: img });
+      } else {
+        const video = document.createElement("video");
+        video.src = bg.url;
+        video.loop = true;
+        video.muted = true;
+        video.playsInline = true;
+        void video.play().catch(() => undefined);
+        map.set(bg.id, { video });
+      }
     }
-    return () => {
-      bgVideoRef.current?.pause();
-      bgVideoRef.current = null;
-      bgImageRef.current = null;
-    };
-  }, [customBg]);
+    for (const id of [...map.keys()]) {
+      if (!customBgs.some((b) => b.id === id)) {
+        map.get(id)?.video?.pause();
+        map.delete(id);
+      }
+    }
+  }, [customBgs]);
+
+  // Presentación de diapositivas: avanza sola cada X segundos.
+  useEffect(() => {
+    if (bgMode !== "slideshow" || customBgs.length < 2) return;
+    const timer = window.setInterval(
+      () => setSlideIndex((i) => (i + 1) % customBgs.length),
+      slideSeconds * 1000,
+    );
+    return () => window.clearInterval(timer);
+  }, [bgMode, slideSeconds, customBgs.length]);
 
   // Bucle de dibujo del canvas.
   useEffect(() => {
@@ -239,32 +303,68 @@ export default function VideoStudio({
         if (canvas.height !== h) canvas.height = h;
         const t = now / 1000;
         const s = stateRef.current;
-        const bgImage = bgImageRef.current;
-        const bgVideo = bgVideoRef.current;
-        if (s.customBg?.kind === "image" && bgImage?.complete) {
-          drawCover(ctx, bgImage, bgImage.naturalWidth, bgImage.naturalHeight, w, h);
-        } else if (s.customBg?.kind === "video" && bgVideo && bgVideo.readyState >= 2) {
-          drawCover(ctx, bgVideo, bgVideo.videoWidth, bgVideo.videoHeight, w, h);
+        // Fondo: propio (una, collage o presentación) o predefinido animado.
+        const drawOneBg = (
+          bg: CustomBgItem,
+          x: number,
+          y: number,
+          bw: number,
+          bh: number,
+        ) => {
+          const el = bgElementsRef.current.get(bg.id);
+          if (bg.kind === "image" && el?.image?.complete) {
+            drawCoverRect(ctx, el.image, el.image.naturalWidth, el.image.naturalHeight, x, y, bw, bh);
+          } else if (bg.kind === "video" && el?.video && el.video.readyState >= 2) {
+            drawCoverRect(ctx, el.video, el.video.videoWidth, el.video.videoHeight, x, y, bw, bh);
+          }
+        };
+        const activeBg = s.customBgs.find((b) => b.id === s.activeCustomId) ?? null;
+        if (activeBg) {
+          if (s.bgMode === "collage" && s.customBgs.length > 1) {
+            drawPreset(ctx, s.preset, w, h, t);
+            const cols = 2;
+            const rows = Math.ceil(s.customBgs.length / cols);
+            const cw = w / cols;
+            const ch = h / rows;
+            s.customBgs.forEach((bg, i) => {
+              drawOneBg(bg, (i % cols) * cw, Math.floor(i / cols) * ch, cw, ch);
+            });
+          } else if (s.bgMode === "slideshow" && s.customBgs.length > 1) {
+            drawPreset(ctx, s.preset, w, h, t);
+            const bg = s.customBgs[s.slideIndex % s.customBgs.length];
+            drawOneBg(bg, 0, 0, w, h);
+          } else {
+            drawPreset(ctx, s.preset, w, h, t);
+            drawOneBg(activeBg, 0, 0, w, h);
+          }
         } else {
           drawPreset(ctx, s.preset, w, h, t);
         }
 
-        // Visualizador
+        // Visualizador: datos en vivo del AnalyserNode cuando suena y
+        // picos del audio como fallback cuando está en pausa.
         const analyser = analyserRef.current;
         const tr = s.track;
+        const live = analyser && s.playing;
+        const freqData = live ? new Uint8Array(analyser.frequencyBinCount) : null;
+        if (freqData && analyser) analyser.getByteFrequencyData(freqData);
+        const timeData = live ? new Uint8Array(analyser.fftSize) : null;
+        if (timeData && analyser) analyser.getByteTimeDomainData(timeData);
+        const valueAt = (frac: number): number => {
+          if (freqData) {
+            return freqData[Math.floor(frac * freqData.length)] / 255;
+          }
+          if (tr) {
+            return tr.peaks[Math.floor(frac * tr.peaks.length)] * 0.8 + 0.1;
+          }
+          return 0.2;
+        };
         ctx.save();
         if (s.visualizer === "bars") {
           const n = 48;
           const barW = w / n;
           for (let i = 0; i < n; i++) {
-            let v = 0.25;
-            if (analyser && s.playing) {
-              const data = new Uint8Array(analyser.frequencyBinCount);
-              analyser.getByteFrequencyData(data);
-              v = data[Math.floor((i / n) * data.length)] / 255;
-            } else if (tr) {
-              v = tr.peaks[Math.floor((i / n) * tr.peaks.length)] * 0.8 + 0.1;
-            }
+            const v = Math.max(0.05, valueAt(i / n));
             const bh = Math.max(6, v * h * 0.35);
             ctx.fillStyle = "rgba(255,255,255,0.85)";
             ctx.fillRect(i * barW + 2, h * 0.78 - bh, barW - 4, bh);
@@ -276,10 +376,8 @@ export default function VideoStudio({
           const cy = h * 0.62;
           for (let x = 0; x <= w; x += 8) {
             let v = 0;
-            if (analyser && s.playing) {
-              const data = new Uint8Array(analyser.fftSize);
-              analyser.getByteTimeDomainData(data);
-              v = (data[Math.floor((x / w) * data.length)] - 128) / 128;
+            if (timeData) {
+              v = (timeData[Math.floor((x / w) * timeData.length)] - 128) / 128;
             } else if (tr) {
               v = Math.sin(x / 40 + t * 2) * tr.peaks[Math.floor((x / w) * tr.peaks.length)];
             }
@@ -288,6 +386,68 @@ export default function VideoStudio({
             else ctx.lineTo(x, y);
           }
           ctx.stroke();
+        } else if (s.visualizer === "spectrum") {
+          // Curva de espectro rellena.
+          const baseline = h * 0.78;
+          const grad = ctx.createLinearGradient(0, h * 0.3, 0, baseline);
+          grad.addColorStop(0, "rgba(34,211,238,0.85)");
+          grad.addColorStop(1, "rgba(255,255,255,0.25)");
+          ctx.beginPath();
+          ctx.moveTo(0, baseline);
+          for (let x = 0; x <= w; x += 8) {
+            const v = Math.max(0.05, valueAt(x / w));
+            ctx.lineTo(x, baseline - v * h * 0.4);
+          }
+          ctx.lineTo(w, baseline);
+          ctx.closePath();
+          ctx.fillStyle = grad;
+          ctx.fill();
+          ctx.strokeStyle = "rgba(255,255,255,0.9)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          for (let x = 0; x <= w; x += 8) {
+            const v = Math.max(0.05, valueAt(x / w));
+            const y = baseline - v * h * 0.4;
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        } else if (s.visualizer === "particles") {
+          // Puntos que reaccionan al sonido, en órbita lenta.
+          const cx = w / 2;
+          const cy = h * 0.55;
+          const n = 90;
+          for (let i = 0; i < n; i++) {
+            const v = Math.max(0.05, valueAt(i / n));
+            const seed = i * 2.39996; // ángulo dorado: reparte sin azar
+            const orbit = 0.25 + ((i * 37) % 100) / 100 * 0.55;
+            const r = Math.min(w, h) * 0.32 * orbit;
+            const ang = seed + t * (0.2 + (i % 5) * 0.08);
+            const x = cx + Math.cos(ang) * r;
+            const y = cy + Math.sin(ang) * r * 0.7 - v * h * 0.12;
+            const rad = 2 + v * 8;
+            ctx.fillStyle =
+              i % 3 === 0
+                ? `rgba(34,211,238,${0.35 + v * 0.6})`
+                : `rgba(255,255,255,${0.3 + v * 0.65})`;
+            ctx.beginPath();
+            ctx.arc(x, y, rad, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        } else if (s.visualizer === "mirror") {
+          // Barras simétricas arriba y abajo de una línea central.
+          const cy = h * 0.62;
+          const n = 48;
+          const barW = w / n;
+          ctx.fillStyle = "rgba(255,255,255,0.5)";
+          ctx.fillRect(0, cy - 1, w, 2);
+          for (let i = 0; i < n; i++) {
+            const v = Math.max(0.05, valueAt(i / n));
+            const bh = Math.max(4, v * h * 0.16);
+            ctx.fillStyle = "rgba(255,255,255,0.85)";
+            ctx.fillRect(i * barW + 2, cy - bh, barW - 4, bh);
+            ctx.fillRect(i * barW + 2, cy, barW - 4, bh);
+          }
         } else {
           // Círculo
           const cx = w / 2;
@@ -300,14 +460,7 @@ export default function VideoStudio({
           ctx.stroke();
           const n = 64;
           for (let i = 0; i < n; i++) {
-            let v = 0.2;
-            if (analyser && s.playing) {
-              const data = new Uint8Array(analyser.frequencyBinCount);
-              analyser.getByteFrequencyData(data);
-              v = data[Math.floor((i / n) * data.length)] / 255;
-            } else if (tr) {
-              v = tr.peaks[Math.floor((i / n) * tr.peaks.length)] * 0.8 + 0.1;
-            }
+            const v = Math.max(0.05, valueAt(i / n));
             const ang = (i / n) * Math.PI * 2;
             const len = 8 + v * r * 0.9;
             ctx.strokeStyle = "rgba(255,255,255,0.85)";
@@ -471,11 +624,31 @@ export default function VideoStudio({
     setRecording(false);
   }
 
-  function onCustomBgFile(file: File, kind: "image" | "video") {
-    const url = URL.createObjectURL(file);
-    setCustomBg((old) => {
-      if (old) URL.revokeObjectURL(old.url);
-      return { kind, url };
+  /** Añade varias imágenes o videos sin borrar los anteriores. */
+  function onCustomBgFiles(files: File[], kind: "image" | "video") {
+    const items: CustomBgItem[] = files.map((file) => ({
+      id: nextBgId(),
+      kind,
+      url: URL.createObjectURL(file),
+      name: file.name,
+    }));
+    if (items.length === 0) return;
+    setCustomBgs((prev) => [...prev, ...items]);
+    // El último añadido pasa a ser el fondo activo.
+    setActiveCustomId(items[items.length - 1].id);
+    setSlideIndex(0);
+  }
+
+  function removeCustomBg(id: string) {
+    setCustomBgs((prev) => {
+      const item = prev.find((b) => b.id === id);
+      if (item) URL.revokeObjectURL(item.url);
+      const next = prev.filter((b) => b.id !== id);
+      if (activeCustomId === id) {
+        setActiveCustomId(next[0]?.id ?? null);
+      }
+      setSlideIndex(0);
+      return next;
     });
   }
 
@@ -565,12 +738,15 @@ export default function VideoStudio({
         </fieldset>
         <fieldset>
           <legend className="text-xs font-bold text-slate-700">Visualizador</legend>
-          <div className="mt-1 flex gap-1">
+          <div className="mt-1 flex flex-wrap gap-1">
             {(
               [
                 ["bars", "Barras"],
                 ["wave", "Onda"],
                 ["circle", "Círculo"],
+                ["spectrum", "Espectro"],
+                ["particles", "Partículas"],
+                ["mirror", "Espejo"],
               ] as Array<[VisualizerStyle, string]>
             ).map(([v, label]) => (
               <button
@@ -599,13 +775,10 @@ export default function VideoStudio({
               type="button"
               onClick={() => {
                 setPreset(i);
-                setCustomBg((old) => {
-                  if (old) URL.revokeObjectURL(old.url);
-                  return null;
-                });
+                setActiveCustomId(null);
               }}
               className={`rounded-lg px-3 py-1.5 text-sm font-bold ${
-                customBg === null && preset === i
+                activeCustomId === null && preset === i
                   ? "bg-cyan-600 text-white"
                   : "bg-slate-100 text-slate-700"
               }`}
@@ -616,37 +789,137 @@ export default function VideoStudio({
         </div>
         <div className="mt-2 flex flex-wrap gap-2">
           <label className="cursor-pointer rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-bold text-slate-700">
-            Imagen propia
+            Imágenes propias
             <input
               type="file"
               accept="image/*"
+              multiple
               className="hidden"
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) onCustomBgFile(f, "image");
+                const files = [...(e.target.files ?? [])];
+                if (files.length > 0) onCustomBgFiles(files, "image");
                 e.target.value = "";
               }}
             />
           </label>
           <label className="cursor-pointer rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-bold text-slate-700">
-            Video propio (en bucle)
+            Videos propios (en bucle)
             <input
               type="file"
               accept="video/*"
+              multiple
               className="hidden"
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) onCustomBgFile(f, "video");
+                const files = [...(e.target.files ?? [])];
+                if (files.length > 0) onCustomBgFiles(files, "video");
                 e.target.value = "";
               }}
             />
           </label>
-          {customBg && (
+          {customBgs.length > 0 && (
             <span className="self-center text-xs text-cyan-700">
-              Fondo propio activo ({customBg.kind === "image" ? "imagen" : "video"})
+              {customBgs.length} fondo{customBgs.length === 1 ? "" : "s"} propio
+              {customBgs.length === 1 ? "" : "s"}
+              {activeCustomId === null ? " guardados (fondo animado activo)" : ""}
             </span>
           )}
         </div>
+        {customBgs.length > 0 && (
+          <>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {customBgs.map((bg) => (
+                <div
+                  key={bg.id}
+                  className={`relative h-14 w-20 overflow-hidden rounded-lg ring-2 ${
+                    activeCustomId === bg.id && bgMode === "single"
+                      ? "ring-cyan-600"
+                      : "ring-slate-200"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveCustomId(bg.id);
+                      setBgMode("single");
+                    }}
+                    aria-label={`Usar ${bg.name} como fondo`}
+                    className="block h-full w-full"
+                  >
+                    {bg.kind === "image" ? (
+                      <img src={bg.url} alt={bg.name} className="h-full w-full object-cover" />
+                    ) : (
+                      <video src={bg.url} muted loop playsInline className="h-full w-full object-cover" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeCustomBg(bg.id)}
+                    aria-label={`Quitar ${bg.name}`}
+                    className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-slate-900/80 text-xs font-bold text-white"
+                  >
+                    ×
+                  </button>
+                  {bg.kind === "video" && (
+                    <span className="absolute bottom-0.5 left-1 rounded bg-slate-900/70 px-1 text-[10px] font-bold text-white">
+                      VIDEO
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1">
+              <span className="mr-1 text-xs font-bold text-slate-600">Modo:</span>
+              {(
+                [
+                  ["single", "Una"],
+                  ["collage", "Collage"],
+                  ["slideshow", "Presentación"],
+                ] as Array<[BackgroundMode, string]>
+              ).map(([m, label]) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => {
+                    setBgMode(m);
+                    setSlideIndex(0);
+                  }}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-bold ${
+                    bgMode === m
+                      ? "bg-cyan-600 text-white"
+                      : "bg-slate-100 text-slate-700"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+              {bgMode === "slideshow" && (
+                <span className="ml-2 flex items-center gap-1 text-xs text-slate-600">
+                  Cambia cada
+                  {[3, 5, 10].map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setSlideSeconds(s)}
+                      className={`rounded-lg px-2 py-1 text-xs font-bold ${
+                        slideSeconds === s
+                          ? "bg-cyan-600 text-white"
+                          : "bg-slate-100 text-slate-700"
+                      }`}
+                    >
+                      {s} s
+                    </button>
+                  ))}
+                </span>
+              )}
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              En “Una” toca una miniatura para mostrarla; en “Collage” se
+              reparten en una rejilla de 2 columnas; en “Presentación” cambian
+              solas cada {slideSeconds} s. Sin fondo propio, se usa el fondo
+              animado elegido arriba.
+            </p>
+          </>
+        )}
       </fieldset>
 
       <div className="grid gap-2 sm:grid-cols-2">

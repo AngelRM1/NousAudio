@@ -53,7 +53,16 @@ export const MAX_TOTAL_MB = 500;
 /** Formatos de video del estudio Audio a Video. */
 export type VideoFormat = "16:9" | "1:1" | "9:16";
 
-export type VisualizerStyle = "bars" | "wave" | "circle";
+export type VisualizerStyle =
+  | "bars"
+  | "wave"
+  | "circle"
+  | "spectrum"
+  | "particles"
+  | "mirror";
+
+/** Cómo se muestran varios fondos propios en el estudio. */
+export type BackgroundMode = "single" | "collage" | "slideshow";
 
 export const VIDEO_SIZES: Record<VideoFormat, { w: number; h: number }> = {
   "16:9": { w: 1280, h: 720 },

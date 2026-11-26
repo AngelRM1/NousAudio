@@ -4,15 +4,26 @@ import { useEffect, useRef, useState } from "react";
 import { formatTime, parseTime } from "@/lib/audio";
 import type { AudioTrack } from "@/lib/types";
 
-/** Onda de un audio con la zona de recorte resaltada. Tocar busca en ese punto. */
+/** Onda de un audio con la zona de recorte resaltada. Tocar busca en ese
+    punto. Dos tiradores (inicio y fin) se arrastran con el dedo o el ratón
+    (pointer events) para ajustar el recorte, mostrando el tiempo en la barra
+    mientras se arrastra. */
 function Waveform({
   track,
   onSeek,
+  onTrim,
 }: {
   track: AudioTrack;
   onSeek: (seconds: number) => void;
+  onTrim: (start: number, end: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<"start" | "end" | null>(null);
+  const [dragging, setDragging] = useState<{
+    which: "start" | "end";
+    time: number;
+  } | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -38,19 +49,126 @@ function Waveform({
     }
   }, [track]);
 
+  function timeFromClientX(clientX: number): number {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return 0;
+    const frac = (clientX - rect.left) / rect.width;
+    return Math.max(0, Math.min(track.duration, frac * track.duration));
+  }
+
+  function applyDrag(clientX: number) {
+    const which = dragRef.current;
+    if (!which) return;
+    const t = timeFromClientX(clientX);
+    const GAP = 0.5;
+    if (which === "start") {
+      const s = Math.min(t, track.end - GAP);
+      onTrim(Math.max(0, s), track.end);
+      setDragging({ which, time: Math.max(0, s) });
+    } else {
+      const e = Math.max(t, track.start + GAP);
+      onTrim(track.start, Math.min(track.duration, e));
+      setDragging({ which, time: Math.min(track.duration, e) });
+    }
+  }
+
+  function handleKey(which: "start" | "end") {
+    return (e: React.KeyboardEvent) => {
+      const step = e.shiftKey ? 5 : 1;
+      if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+        e.preventDefault();
+        if (which === "start")
+          onTrim(Math.max(0, track.start - step), track.end);
+        else onTrim(track.start, Math.max(track.start + 0.5, track.end - step));
+      } else if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (which === "start")
+          onTrim(Math.min(track.end - 0.5, track.start + step), track.end);
+        else onTrim(track.start, Math.min(track.duration, track.end + step));
+      }
+    };
+  }
+
+  const startPct = (track.start / track.duration) * 100;
+  const endPct = (track.end / track.duration) * 100;
+
   return (
-    <canvas
-      ref={canvasRef}
-      width={320}
-      height={56}
-      className="h-14 w-full cursor-pointer rounded-lg"
+    <div
+      ref={containerRef}
+      className="relative h-14 w-full"
       onClick={(e) => {
-        const rect = e.currentTarget.getBoundingClientRect();
+        // El clic en la onda busca en ese punto; los tiradores detienen
+        // la propagación, así que un clic suyo nunca llega aquí.
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (!rect) return;
         const frac = (e.clientX - rect.left) / rect.width;
         onSeek(Math.max(0, Math.min(track.duration, frac * track.duration)));
       }}
-      aria-label={`Onda de ${track.name}`}
-    />
+    >
+      <canvas
+        ref={canvasRef}
+        width={320}
+        height={56}
+        className="h-14 w-full cursor-pointer rounded-lg"
+        aria-label={`Onda de ${track.name}`}
+      />
+      {(["start", "end"] as const).map((which) => {
+        const pct = which === "start" ? startPct : endPct;
+        const time = which === "start" ? track.start : track.end;
+        const isDragging = dragging?.which === which;
+        return (
+          <div
+            key={which}
+            role="slider"
+            tabIndex={0}
+            aria-label={
+              which === "start" ? "Inicio del recorte" : "Fin del recorte"
+            }
+            aria-valuemin={0}
+            aria-valuemax={track.duration}
+            aria-valuenow={Math.round(time)}
+            aria-valuetext={formatTime(time)}
+            className="absolute top-0 z-10 flex h-full w-4 -translate-x-1/2 cursor-ew-resize touch-none items-stretch justify-center outline-none focus-visible:ring-2 focus-visible:ring-cyan-600"
+            style={{ left: `${pct}%` }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              dragRef.current = which;
+              (e.target as HTMLElement).setPointerCapture(e.pointerId);
+              setDragging({ which, time });
+            }}
+            onPointerMove={(e) => {
+              if (dragRef.current === which) applyDrag(e.clientX);
+            }}
+            onPointerUp={(e) => {
+              if (dragRef.current === which) {
+                applyDrag(e.clientX);
+                dragRef.current = null;
+                setDragging(null);
+              }
+            }}
+            onPointerCancel={() => {
+              dragRef.current = null;
+              setDragging(null);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={handleKey(which)}
+          >
+            <span
+              className={`block h-full w-1.5 rounded-full ${
+                isDragging ? "bg-cyan-700" : "bg-cyan-600"
+              } shadow`}
+            />
+            {isDragging && (
+              <span className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[11px] font-bold text-white shadow">
+                {which === "start" ? "Inicio " : "Fin "}
+                {formatTime(dragging.time)}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -189,9 +307,17 @@ function TrackRow({
         </button>
       </div>
 
-      <button type="button" onClick={onSelect} className="mt-2 block w-full">
-        <Waveform track={track} onSeek={seek} />
-      </button>
+      <div
+        className="mt-2 block w-full cursor-pointer"
+        onClick={onSelect}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onSelect();
+        }}
+      >
+        <Waveform track={track} onSeek={seek} onTrim={onTrim} />
+      </div>
 
       <div className="mt-2 flex items-center gap-2 text-xs">
         <label className="flex items-center gap-1 text-slate-600">
